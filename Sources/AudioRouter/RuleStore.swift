@@ -21,7 +21,7 @@ final class RuleStore {
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Announcer", isDirectory: true)
+        let dir = base.appendingPathComponent("AudioRouter", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("rules.json")
     }

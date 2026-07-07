@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "hifispeaker.2", accessibilityDescription: "Announcer")
+            let image = NSImage(systemSymbolName: "hifispeaker.2", accessibilityDescription: "AudioRouter")
             image?.isTemplate = true
             button.image = image
         }
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let active = engine.rules.keys.contains { engine.isRouteActive(bundleID: $0) }
         let symbol = active ? "hifispeaker.2.fill" : "hifispeaker.2"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Announcer")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "AudioRouter")
         image?.isTemplate = true
         button.image = image
     }
@@ -89,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(loginItem)
 
-        let quitItem = NSMenuItem(title: "Quit Announcer", action: #selector(quit(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit AudioRouter", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }

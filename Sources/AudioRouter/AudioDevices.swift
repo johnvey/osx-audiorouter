@@ -8,7 +8,7 @@ struct AudioOutputDevice: Equatable {
 }
 
 enum AudioDevices {
-    /// All devices that can render audio, excluding aggregates Announcer creates for itself.
+    /// All devices that can render audio, excluding aggregates AudioRouter creates for itself.
     static func outputDevices() -> [AudioOutputDevice] {
         getObjectIDArray(systemObjectID, kAudioHardwarePropertyDevices).compactMap { id in
             guard outputChannelCount(id) > 0 else { return nil }

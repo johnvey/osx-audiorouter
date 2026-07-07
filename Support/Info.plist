@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>Announcer</string>
+	<string>AudioRouter</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.johnvey.announcer</string>
+	<string>com.johnvey.audiorouter</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Announcer</string>
+	<string>AudioRouter</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -23,7 +23,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Announcer captures the audio of apps you choose so it can route that audio to a different output device.</string>
+	<string>AudioRouter captures the audio of apps you choose so it can route that audio to a different output device.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>

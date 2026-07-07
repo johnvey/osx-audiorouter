@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Announcer",
+    name: "AudioRouter",
     platforms: [
         .macOS("14.4")
     ],
     targets: [
         .executableTarget(
-            name: "Announcer",
-            path: "Sources/Announcer"
+            name: "AudioRouter",
+            path: "Sources/AudioRouter"
         )
     ]
 )

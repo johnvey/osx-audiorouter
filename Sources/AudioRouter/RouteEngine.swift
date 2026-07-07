@@ -10,7 +10,7 @@ import os
 ///
 /// Main-thread confined except for the realtime IO blocks.
 final class RouteEngine {
-    static let aggregateUIDPrefix = "com.johnvey.announcer.aggregate."
+    static let aggregateUIDPrefix = "com.johnvey.audiorouter.aggregate."
 
     private struct Route {
         let bundleID: String
@@ -30,7 +30,7 @@ final class RouteEngine {
         "com.apple.Safari": ["com.apple.WebKit.GPU"]
     ]
 
-    private let log = Logger(subsystem: "com.johnvey.announcer", category: "RouteEngine")
+    private let log = Logger(subsystem: "com.johnvey.audiorouter", category: "RouteEngine")
     private let store = RuleStore()
     private var routes: [String: Route] = [:]
     private var reconcilePending = false
@@ -204,7 +204,7 @@ final class RouteEngine {
         gain: Float
     ) throws {
         let description = CATapDescription(stereoMixdownOfProcesses: Array(processObjectIDs))
-        description.name = "Announcer tap: \(bundleID)"
+        description.name = "AudioRouter tap: \(bundleID)"
         description.muteBehavior = .mutedWhenTapped
         description.isPrivate = true
 
@@ -212,7 +212,7 @@ final class RouteEngine {
         try check(AudioHardwareCreateProcessTap(description, &tapID), "AudioHardwareCreateProcessTap")
 
         let aggregateDescription: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Announcer: \(bundleID)",
+            kAudioAggregateDeviceNameKey: "AudioRouter: \(bundleID)",
             kAudioAggregateDeviceUIDKey: Self.aggregateUIDPrefix + UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
@@ -244,7 +244,7 @@ final class RouteEngine {
         gainPointer.initialize(to: gain)
 
         var procID: AudioDeviceIOProcID?
-        let ioQueue = DispatchQueue(label: "com.johnvey.announcer.io.\(bundleID)", qos: .userInteractive)
+        let ioQueue = DispatchQueue(label: "com.johnvey.audiorouter.io.\(bundleID)", qos: .userInteractive)
         do {
             try check(
                 AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, ioQueue) { _, inInputData, _, outOutputData, _ in
