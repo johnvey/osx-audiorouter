@@ -22,6 +22,17 @@ enum AudioDevices {
     static func device(forUID uid: String) -> AudioOutputDevice? {
         outputDevices().first { $0.uid == uid }
     }
+
+    static func defaultOutputDevice() -> AudioOutputDevice? {
+        var addr = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var id = AudioObjectID(kAudioObjectUnknown)
+        guard AudioObjectGetPropertyData(systemObjectID, &addr, 0, nil, &size, &id) == noErr,
+              id != kAudioObjectUnknown,
+              let uid = getString(id, kAudioDevicePropertyDeviceUID),
+              let name = getString(id, kAudioObjectPropertyName) else { return nil }
+        return AudioOutputDevice(id: id, uid: uid, name: name)
+    }
 }
 
 struct AudioProcessEntry {

@@ -3,9 +3,10 @@ import CoreAudio
 import Foundation
 import os
 
-/// Owns all active audio routes. For each rule (app bundle ID -> output device UID) whose app has
-/// live audio process objects, it creates a process tap that mutes the app's normal output and an
-/// IO proc on a private aggregate device that re-renders the tapped audio to the chosen device.
+/// Owns all active audio routes. For each rule whose app has live audio process objects, it
+/// creates a process tap that mutes the app's normal output and an IO proc on a private aggregate
+/// device that re-renders the tapped audio (with the rule's gain applied) to the target device —
+/// the rule's device, or the system default device for volume-only rules.
 ///
 /// Main-thread confined except for the realtime IO blocks.
 final class RouteEngine {
@@ -13,11 +14,15 @@ final class RouteEngine {
 
     private struct Route {
         let bundleID: String
+        /// The resolved target device UID (for volume-only rules, the default device at build time).
         let deviceUID: String
         let processObjectIDs: Set<AudioObjectID>
         let tapID: AudioObjectID
         let aggregateID: AudioObjectID
         let procID: AudioDeviceIOProcID
+        /// Written from the main thread, read from the realtime IO thread. Aligned 32-bit
+        /// loads/stores are atomic on our targets, so no lock is needed.
+        let gain: UnsafeMutablePointer<Float32>
     }
 
     /// Audio for some apps is produced by a differently-named helper process.
@@ -29,10 +34,11 @@ final class RouteEngine {
     private let store = RuleStore()
     private var routes: [String: Route] = [:]
     private var reconcilePending = false
+    private var savePending = false
     private var listenerBlock: AudioObjectPropertyListenerBlock?
 
-    /// bundleID -> output device UID
-    private(set) var rules: [String: String]
+    /// bundleID -> rule
+    private(set) var rules: [String: Rule]
 
     /// Fired after routes change so the UI can refresh.
     var onChange: (() -> Void)?
@@ -48,8 +54,10 @@ final class RouteEngine {
         listenerBlock = block
         var processAddr = propertyAddress(kAudioHardwarePropertyProcessObjectList)
         var deviceAddr = propertyAddress(kAudioHardwarePropertyDevices)
+        var defaultAddr = propertyAddress(kAudioHardwarePropertyDefaultOutputDevice)
         AudioObjectAddPropertyListenerBlock(systemObjectID, &processAddr, DispatchQueue.main, block)
         AudioObjectAddPropertyListenerBlock(systemObjectID, &deviceAddr, DispatchQueue.main, block)
+        AudioObjectAddPropertyListenerBlock(systemObjectID, &defaultAddr, DispatchQueue.main, block)
         reconcile()
     }
 
@@ -59,13 +67,34 @@ final class RouteEngine {
     }
 
     func setRule(bundleID: String, deviceUID: String?) {
-        if let deviceUID {
-            rules[bundleID] = deviceUID
-        } else {
-            rules.removeValue(forKey: bundleID)
-        }
+        var rule = rules[bundleID] ?? Rule()
+        rule.deviceUID = deviceUID
+        applyRule(bundleID: bundleID, rule: rule)
         store.save(rules)
         reconcile()
+    }
+
+    /// Live-updates the gain of an active route; creates/removes the rule as needed.
+    /// Cheap enough to call continuously from a slider drag.
+    func setVolume(bundleID: String, volume: Float) {
+        var rule = rules[bundleID] ?? Rule()
+        rule.volume = min(max(volume, 0), 1)
+        applyRule(bundleID: bundleID, rule: rule)
+        if let route = routes[bundleID] {
+            route.gain.pointee = rule.volume
+        }
+        scheduleSave()
+        // Coalesced: builds the tap when a volume-only rule first appears, or tears it down
+        // when the rule becomes a no-op. Gain changes on live routes never rebuild.
+        scheduleReconcile()
+    }
+
+    private func applyRule(bundleID: String, rule: Rule) {
+        if rule.isNoOp {
+            rules.removeValue(forKey: bundleID)
+        } else {
+            rules[bundleID] = rule
+        }
     }
 
     func teardownAll() {
@@ -87,17 +116,33 @@ final class RouteEngine {
         }
     }
 
+    private func scheduleSave() {
+        guard !savePending else { return }
+        savePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            self.savePending = false
+            self.store.save(self.rules)
+        }
+    }
+
     private func reconcile() {
         let devices = AudioDevices.outputDevices()
         let processes = AudioProcesses.all()
+        let defaultDevice = AudioDevices.defaultOutputDevice()
 
-        for (bundleID, deviceUID) in rules {
+        for (bundleID, rule) in rules {
             let desired = Set(
                 processes
                     .filter { Self.processMatches(rule: bundleID, processBundleID: $0.bundleID) }
                     .map(\.objectID)
             )
-            let device = devices.first { $0.uid == deviceUID }
+            let device: AudioOutputDevice?
+            if let uid = rule.deviceUID {
+                device = devices.first { $0.uid == uid }
+            } else {
+                device = defaultDevice
+            }
 
             if desired.isEmpty || device == nil {
                 // App has no audio presence or device unplugged: no route needed right now.
@@ -106,12 +151,15 @@ final class RouteEngine {
             }
 
             if let existing = routes[bundleID] {
-                if existing.deviceUID == deviceUID && existing.processObjectIDs == desired { continue }
+                if existing.deviceUID == device!.uid && existing.processObjectIDs == desired {
+                    existing.gain.pointee = rule.volume
+                    continue
+                }
                 teardownRoute(bundleID: bundleID)
             }
 
             do {
-                try buildRoute(bundleID: bundleID, device: device!, processObjectIDs: desired)
+                try buildRoute(bundleID: bundleID, device: device!, processObjectIDs: desired, gain: rule.volume)
             } catch {
                 log.error("Failed to build route for \(bundleID, privacy: .public): \(error, privacy: .public)")
             }
@@ -149,7 +197,12 @@ final class RouteEngine {
         guard status == noErr else { throw RouteError.osStatus(status, operation) }
     }
 
-    private func buildRoute(bundleID: String, device: AudioOutputDevice, processObjectIDs: Set<AudioObjectID>) throws {
+    private func buildRoute(
+        bundleID: String,
+        device: AudioOutputDevice,
+        processObjectIDs: Set<AudioObjectID>,
+        gain: Float
+    ) throws {
         let description = CATapDescription(stereoMixdownOfProcesses: Array(processObjectIDs))
         description.name = "Announcer tap: \(bundleID)"
         description.muteBehavior = .mutedWhenTapped
@@ -187,12 +240,15 @@ final class RouteEngine {
             throw error
         }
 
+        let gainPointer = UnsafeMutablePointer<Float32>.allocate(capacity: 1)
+        gainPointer.initialize(to: gain)
+
         var procID: AudioDeviceIOProcID?
         let ioQueue = DispatchQueue(label: "com.johnvey.announcer.io.\(bundleID)", qos: .userInteractive)
         do {
             try check(
                 AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, ioQueue) { _, inInputData, _, outOutputData, _ in
-                    Self.render(input: inInputData, output: outOutputData)
+                    Self.render(input: inInputData, output: outOutputData, gain: gainPointer.pointee)
                 },
                 "AudioDeviceCreateIOProcIDWithBlock"
             )
@@ -201,6 +257,7 @@ final class RouteEngine {
             if let procID { AudioDeviceDestroyIOProcID(aggregateID, procID) }
             AudioHardwareDestroyAggregateDevice(aggregateID)
             AudioHardwareDestroyProcessTap(tapID)
+            gainPointer.deallocate()
             throw error
         }
 
@@ -210,31 +267,39 @@ final class RouteEngine {
             processObjectIDs: processObjectIDs,
             tapID: tapID,
             aggregateID: aggregateID,
-            procID: procID!
+            procID: procID!,
+            gain: gainPointer
         )
-        log.info("Routing \(bundleID, privacy: .public) -> \(device.name, privacy: .public)")
+        log.info("Routing \(bundleID, privacy: .public) -> \(device.name, privacy: .public) at gain \(gain, privacy: .public)")
     }
 
     private func teardownRoute(bundleID: String) {
         guard let route = routes.removeValue(forKey: bundleID) else { return }
         AudioDeviceStop(route.aggregateID, route.procID)
+        // Blocks until in-flight IO callbacks finish, after which the gain pointer is unreferenced.
         AudioDeviceDestroyIOProcID(route.aggregateID, route.procID)
         AudioHardwareDestroyAggregateDevice(route.aggregateID)
         AudioHardwareDestroyProcessTap(route.tapID)
+        route.gain.deallocate()
         log.info("Stopped routing \(bundleID, privacy: .public)")
     }
 
     // MARK: - Realtime render
 
-    /// Copies the tap's (stereo, Float32) input buffers into the output device's buffers.
-    /// Runs on the realtime IO thread: no allocation, no locks, no ObjC.
-    private static func render(input: UnsafePointer<AudioBufferList>, output: UnsafeMutablePointer<AudioBufferList>) {
+    /// Copies the tap's (stereo, Float32) input buffers into the output device's buffers,
+    /// applying the route's gain. Runs on the realtime IO thread: no allocation, no locks, no ObjC.
+    private static func render(
+        input: UnsafePointer<AudioBufferList>,
+        output: UnsafeMutablePointer<AudioBufferList>,
+        gain: Float32
+    ) {
         let outABL = UnsafeMutableAudioBufferListPointer(output)
         for buffer in outABL {
             if let data = buffer.mData {
                 memset(data, 0, Int(buffer.mDataByteSize))
             }
         }
+        guard gain > 0 else { return }
 
         let inABL = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         guard let inBuffer = inABL.first(where: { $0.mNumberChannels > 0 && $0.mData != nil }),
@@ -254,7 +319,7 @@ final class RouteEngine {
             for frame in 0..<frames {
                 for channel in 0..<channels {
                     let inChannel = min(channel, inChannels - 1)
-                    outSamples[frame * outChannels + channel] = inSamples[frame * inChannels + inChannel]
+                    outSamples[frame * outChannels + channel] = inSamples[frame * inChannels + inChannel] * gain
                 }
             }
         }

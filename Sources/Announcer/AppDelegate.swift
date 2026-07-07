@@ -63,13 +63,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 small.size = NSSize(width: 16, height: 16)
                 item.image = small
             }
-            let ruleUID = engine.rules[app.bundleID]
-            if let ruleUID {
-                let deviceName = devices.first { $0.uid == ruleUID }?.name ?? "missing device"
-                let live = engine.isRouteActive(bundleID: app.bundleID)
-                item.subtitle = live ? "→ \(deviceName)" : "→ \(deviceName) (idle)"
+            let rule = engine.rules[app.bundleID]
+            if let rule {
+                var parts: [String] = []
+                if let uid = rule.deviceUID {
+                    parts.append("→ " + (devices.first { $0.uid == uid }?.name ?? "missing device"))
+                }
+                if rule.volume < 0.999 {
+                    parts.append("\(Int((rule.volume * 100).rounded()))%")
+                }
+                var subtitle = parts.joined(separator: " · ")
+                if !engine.isRouteActive(bundleID: app.bundleID) {
+                    subtitle += " (idle)"
+                }
+                item.subtitle = subtitle
             }
-            item.submenu = deviceSubmenu(for: app, devices: devices, ruleUID: ruleUID)
+            item.submenu = deviceSubmenu(for: app, devices: devices, rule: rule)
             menu.addItem(item)
         }
 
@@ -85,8 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    private func deviceSubmenu(for app: CandidateApp, devices: [AudioOutputDevice], ruleUID: String?) -> NSMenu {
+    private func deviceSubmenu(for app: CandidateApp, devices: [AudioOutputDevice], rule: Rule?) -> NSMenu {
         let submenu = NSMenu()
+        let ruleUID = rule?.deviceUID
 
         let systemDefault = NSMenuItem(title: "System Default", action: #selector(selectDevice(_:)), keyEquivalent: "")
         systemDefault.target = self
@@ -111,7 +121,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             submenu.addItem(item)
         }
 
+        submenu.addItem(.separator())
+        let volumeHeader = NSMenuItem(title: "Volume", action: nil, keyEquivalent: "")
+        volumeHeader.isEnabled = false
+        submenu.addItem(volumeHeader)
+        submenu.addItem(volumeSliderItem(for: app.bundleID, volume: rule?.volume ?? 1.0))
+
         return submenu
+    }
+
+    private final class VolumeSlider: NSSlider {
+        var bundleID = ""
+        weak var percentLabel: NSTextField?
+    }
+
+    private func volumeSliderItem(for bundleID: String, volume: Float) -> NSMenuItem {
+        let item = NSMenuItem()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 26))
+
+        let slider = VolumeSlider(
+            value: Double(volume) * 100,
+            minValue: 0,
+            maxValue: 100,
+            target: self,
+            action: #selector(volumeChanged(_:))
+        )
+        slider.bundleID = bundleID
+        slider.isContinuous = true
+        slider.frame = NSRect(x: 14, y: 3, width: 168, height: 20)
+
+        let label = NSTextField(labelWithString: "\(Int((volume * 100).rounded()))%")
+        label.frame = NSRect(x: 188, y: 5, width: 40, height: 16)
+        label.font = .menuFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .right
+        slider.percentLabel = label
+
+        container.addSubview(slider)
+        container.addSubview(label)
+        item.view = container
+        return item
     }
 
     private final class RouteSelection: NSObject {
@@ -157,6 +206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func selectDevice(_ sender: NSMenuItem) {
         guard let selection = sender.representedObject as? RouteSelection else { return }
         engine.setRule(bundleID: selection.bundleID, deviceUID: selection.deviceUID)
+    }
+
+    @objc private func volumeChanged(_ sender: VolumeSlider) {
+        sender.percentLabel?.stringValue = "\(Int(sender.doubleValue.rounded()))%"
+        engine.setVolume(bundleID: sender.bundleID, volume: Float(sender.doubleValue / 100))
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
