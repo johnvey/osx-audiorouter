@@ -2,12 +2,17 @@
 
 A tiny native macOS menu bar app that routes specific apps to specific audio **output** devices — a minimal subset of [SoundSource](https://rogueamoeba.com/soundsource/). No drivers, no kernel extensions: it uses the CoreAudio process-tap API built into macOS 14.4+.
 
+The most likely use case is to have Spotify play on a different OSX audio device than the default one set in the Sound control panel.
+
+<img width="549" height="583" alt="Screenshot 2026-07-06 at 10 52 30 PM" src="https://github.com/user-attachments/assets/4a764103-65cb-468a-8904-7e742b57e609" />
+
 ## Usage
 
 ```sh
 ./build.sh
 cp -R build/AudioRouter.app /Applications/
 open /Applications/AudioRouter.app
+
 ```
 
 Click the speaker icon in the menu bar, pick an app, pick an output device. Pick **System Default** to stop routing that app. Each app's submenu also has a **volume slider** that adjusts that app alone — it works whether or not the app is routed to another device. Enable **Launch at Login** to make it persistent.
@@ -43,3 +48,7 @@ swift build          # debug build
 ```
 
 Sources are plain AppKit + CoreAudio, one executable target, no dependencies.
+
+## License
+
+[GPL-3.0](LICENSE)
